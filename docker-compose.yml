@@ -1,0 +1,112 @@
+version: "3.8"
+
+services:
+  traefik:
+    image: traefik:v2.9
+    container_name: traefik
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/acme.json:/acme.json:rw
+      - ./traefik/traefik.yml:/traefik.yml:ro
+    networks:
+      - wazo-network
+
+  postgres:
+    image: postgres:14
+    container_name: postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=wazo
+      - POSTGRES_PASSWORD=wazopassword
+      - POSTGRES_DB=wazo
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - wazo-network
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: always
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=wazo
+      - N8N_BASIC_AUTH_PASSWORD=wazopassword
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=wazo
+      - DB_POSTGRESDB_USER=wazo
+      - DB_POSTGRESDB_PASSWORD=wazopassword
+      - N8N_HOST=n8n.wazo.local
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://n8n.wazo.local/
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n.rule=Host(`n8n.wazo.local`)"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls=true"
+      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - wazo-network
+    depends_on:
+      - postgres
+
+  backend:
+    build:
+      context: ./backend
+    container_name: wazo-backend
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=wazo
+      - DB_USER=wazo
+      - DB_PASSWORD=wazopassword
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(`api.wazo.local`)"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls=true"
+      - "traefik.http.services.backend.loadbalancer.server.port=3000"
+    networks:
+      - wazo-network
+    depends_on:
+      - postgres
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: wazo-frontend
+    restart: always
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`wazo.local`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls=true"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+    networks:
+      - wazo-network
+    depends_on:
+      - backend
+
+networks:
+  wazo-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  n8n_data:
